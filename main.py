@@ -28,7 +28,7 @@ class WashingMachineDetector:
             self,
             camera_source: int = 0,
             backend_url: str = "http://localhost:8000/api/machine-state",
-            motion_threshold: float = 0.08,
+            motion_threshold: float = 0.02,
             state_change_delay: float = 3.0,
             motion_history_size: int = 30,
             http_post: Optional[Callable[..., Any]] = None,
@@ -164,83 +164,17 @@ class WashingMachineDetector:
         cv2.destroyWindow('Setup Machine Circles')
         return circles
 
-    def detect_motion_in_roi(self, frame: np.ndarray, prev_frame: np.ndarray,
-                             roi: Tuple[int, int, int, int]) -> float:
-        """
-        Detect motion within a specific ROI
-
-        Args:
-            frame: Current frame
-            prev_frame: Previous frame
-            roi: Region of interest (x, y, width, height)
-
-        Returns:
-            Motion score (0-1)
-        """
-        x, y, w, h = roi
-
-        # Ensure ROI is within frame bounds
-        x = max(0, x)
-        y = max(0, y)
-        w = min(w, frame.shape[1] - x)
-        h = min(h, frame.shape[0] - y)
-
-        if w <= 0 or h <= 0:
-            return 0.0
-
-        # Extract ROI from both frames
-        current_roi = frame[y:y + h, x:x + w]
-        prev_roi = prev_frame[y:y + h, x:x + w]
-
-        # Convert to grayscale
-        current_gray = cv2.cvtColor(current_roi, cv2.COLOR_BGR2GRAY)
-        prev_gray = cv2.cvtColor(prev_roi, cv2.COLOR_BGR2GRAY)
-
-        # Apply Gaussian blur to reduce noise.
-        # Make kernel size relative to ROI size to keep similar smoothing across scales.
-        # Base it on the smaller ROI dimension.
-        min_dim = max(1, min(w, h))
-        # Roughly 1/10 of min dimension, forced odd and within [3, 31]
-        k = max(3, min(31, (min_dim // 10) * 2 + 1))
-        current_blur = cv2.GaussianBlur(current_gray, (k, k), 0)
-        prev_blur = cv2.GaussianBlur(prev_gray, (k, k), 0)
-
-        # Calculate absolute difference
-        frame_diff = cv2.absdiff(current_blur, prev_blur)
-
-        # Threshold the difference
-        _, thresh = cv2.threshold(frame_diff, 25, 255, cv2.THRESH_BINARY)
-
-        # Create a circular mask inside the ROI so motion is measured relative to the indicator circle,
-        # not the full rectangle. This makes scores comparable for small vs large circles.
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cx, cy = w // 2, h // 2
-        radius = max(1, min(w, h) // 2 - 1)
-        cv2.circle(mask, (cx, cy), radius, 255, thickness=-1)
-
-        # Count changed pixels only inside the circular mask and normalize by mask area
-        masked_changes = cv2.bitwise_and(thresh, thresh, mask=mask)
-        changed_pixels = int(np.count_nonzero(masked_changes))
-        mask_area = int(np.count_nonzero(mask))
-        if mask_area == 0:
-            return 0.0
-
-        motion_score = changed_pixels / float(mask_area)
-
-        return motion_score
-
     def detect_rotation_in_circle(self, frame: np.ndarray, prev_frame: np.ndarray,
                                   roi: Tuple[int, int, int, int]) -> float:
         """
         Rotation-aware motion detection inside the circular ROI.
 
-        Converts the ROI to polar coordinates so rotation becomes a horizontal shift
-        and estimates the angular shift between frames via circular cross-correlation.
+        This version is ROBUST to:
+        - Occlusion (hand covering the circle)
+        - Brightness changes
+        - Shadows
 
-        Returns a normalized motion score in [0, 1] roughly proportional to the
-        absolute angular change per frame. The scale is designed so ~180°/frame
-        maps to ~1.0 (actual shifts are usually far smaller), making thresholds
-        comparable to the prior implementation (~0.04 default).
+        It specifically looks for ROTATIONAL patterns, not general motion.
         """
         x, y, w, h = roi
 
@@ -259,77 +193,88 @@ class WashingMachineDetector:
         # Determine circle center and radius within ROI
         cx, cy = w // 2, h // 2
         min_dim = min(w, h)
-        if min_dim <= 4:  # Check min_dim before calculating R
+        if min_dim <= 4:
             return 0.0
 
         R = max(1, min_dim // 2 - 1)
         if R <= 2:
             return 0.0
 
-        # Light blur relative to ROI size
-        k = max(3, min(31, (min_dim // 10) * 2 + 1))
-        cur_blur = cv2.GaussianBlur(cur, (k, k), 0)
-        prev_blur = cv2.GaussianBlur(prev, (k, k), 0)
+        # Step 1: Create circular mask to ignore area outside the circle
+        # This prevents hands/shadows outside the drum from affecting detection
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask, (cx, cy), R, 255, thickness=-1)
 
-        # Edge/gradient magnitude to reduce illumination sensitivity
+        # Apply mask to both frames
+        cur_masked = cv2.bitwise_and(cur, cur, mask=mask)
+        prev_masked = cv2.bitwise_and(prev, prev, mask=mask)
+
+        # Step 2: Use adaptive histogram equalization to reduce sensitivity to brightness changes
+        # This helps ignore shadows and lighting changes from hands
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        cur_eq = clahe.apply(cur_masked)
+        prev_eq = clahe.apply(prev_masked)
+
+        # Step 3: Light blur to reduce noise
+        k = max(3, min(31, (min_dim // 10) * 2 + 1))
+        cur_blur = cv2.GaussianBlur(cur_eq, (k, k), 0)
+        prev_blur = cv2.GaussianBlur(prev_eq, (k, k), 0)
+
+        # Step 4: Use gradient magnitude instead of raw intensity
+        # Gradients are less sensitive to uniform brightness changes (shadows, occlusion)
         cur_gx = cv2.Sobel(cur_blur, cv2.CV_32F, 1, 0, ksize=3)
         cur_gy = cv2.Sobel(cur_blur, cv2.CV_32F, 0, 1, ksize=3)
         prev_gx = cv2.Sobel(prev_blur, cv2.CV_32F, 1, 0, ksize=3)
         prev_gy = cv2.Sobel(prev_blur, cv2.CV_32F, 0, 1, ksize=3)
+
         cur_mag = cv2.magnitude(cur_gx, cur_gy)
         prev_mag = cv2.magnitude(prev_gx, prev_gy)
 
-        # Build polar images
-        # Angular samples - 360 is good for 1° resolution
+        # Step 5: Build polar images
         N_theta = 360
-        # Radial samples
         N_r = R
 
-        # IMPORTANT: cv2.warpPolar(src, dsize, center, maxRadius, flags)
-        # dsize = (width, height)
-        # output.shape = (height, width)
-        #
-        # For WARP_POLAR_LINEAR, typical usage is dsize = (maxRadius, angleSteps)
-        # This produces output of shape (angleSteps, maxRadius)
-        # Where: rows = angular positions (0 to 2π), cols = radial positions (0 to R)
-        #
-        # So we want: dsize = (N_r, N_theta) to get output shape (N_theta, N_r)
         flags = cv2.WARP_POLAR_LINEAR + cv2.INTER_LINEAR + cv2.WARP_FILL_OUTLIERS
 
-        cur_polar = cv2.warpPolar(cur_mag, (N_r, N_theta), (cx, cy), R, flags)
-        prev_polar = cv2.warpPolar(prev_mag, (N_r, N_theta), (cx, cy), R, flags)
+        try:
+            cur_polar = cv2.warpPolar(cur_mag, (N_r, N_theta), (cx, cy), R, flags)
+            prev_polar = cv2.warpPolar(prev_mag, (N_r, N_theta), (cx, cy), R, flags)
+        except Exception as e:
+            logger.warning(f"warpPolar failed: {e}")
+            return 0.0
 
         # Verify dimensions
         if cur_polar.shape != (N_theta, N_r):
-            logger.warning(
-                f"Unexpected polar shape: {cur_polar.shape}, expected ({N_theta}, {N_r})"
-            )
+            logger.debug(f"Unexpected polar shape: {cur_polar.shape}, expected ({N_theta}, {N_r})")
             return 0.0
 
-        # Extract angular signature from a ring band
-        # polar.shape = (N_theta, N_r) where rows = angles, cols = radii
-        # We want to:
-        # 1. Select a radial band (columns r0:r1)
-        # 2. Average across radii for each angle (axis=1)
+        # Step 6: Extract angular signature from middle radial band only
+        # Using middle band (55%-90% of radius) avoids:
+        # - Center artifacts
+        # - Edge artifacts
+        # - Occlusion at edges
         r0 = max(1, int(0.55 * N_r))
         r1 = max(r0 + 1, int(0.90 * N_r))
         r1 = min(r1, N_r)
         if r1 <= r0:
             return 0.0
 
-        # Slice: polar[:, r0:r1] gives us all angles, radial band
-        # Average across radii (axis=1) to get angular signature
+        # Extract radial band and average to get angular signatures
         cur_sig = np.mean(cur_polar[:, r0:r1], axis=1).astype(np.float32)
         prev_sig = np.mean(prev_polar[:, r0:r1], axis=1).astype(np.float32)
 
-        # Verify signature length
-        if len(cur_sig) != N_theta or len(prev_sig) != N_theta:
-            logger.warning(
-                f"Unexpected signature length: {len(cur_sig)}, expected {N_theta}"
-            )
+        # Step 7: Check if there's enough texture/variation in the signal
+        # If the drum is uniform or completely occluded, std will be very low
+        cur_std = np.std(cur_sig)
+        prev_std = np.std(prev_sig)
+
+        # Minimum texture threshold - if both frames are too uniform, likely occluded or no features
+        MIN_TEXTURE_STD = 2.0  # Tune this based on your camera/lighting
+        if cur_std < MIN_TEXTURE_STD or prev_std < MIN_TEXTURE_STD:
+            logger.debug(f"Insufficient texture: cur_std={cur_std:.2f}, prev_std={prev_std:.2f}")
             return 0.0
 
-        # Normalize signatures to zero-mean, unit-variance
+        # Step 8: Normalize signatures
         def normalize(sig: np.ndarray) -> np.ndarray:
             s = sig - np.mean(sig)
             std = float(np.std(s))
@@ -338,12 +283,10 @@ class WashingMachineDetector:
         a = normalize(cur_sig)
         b = normalize(prev_sig)
 
-        # Check for valid normalized signals
         if not np.any(np.isfinite(a)) or not np.any(np.isfinite(b)):
             return 0.0
 
-        # Circular cross-correlation via FFT
-        # This finds the angular shift that best aligns the two signatures
+        # Step 9: Circular cross-correlation to find rotation
         Fa = np.fft.rfft(a)
         Fb = np.fft.rfft(b)
         cc = np.fft.irfft(Fa * np.conj(Fb), n=len(a))
@@ -355,12 +298,19 @@ class WashingMachineDetector:
         else:
             cc_norm = cc
 
-        # Find peak correlation and its position
+        # Find peak correlation
         k_max = int(np.argmax(cc_norm))
         peak = float(cc_norm[k_max])
 
-        # Convert shift index to degrees
-        # Handle wrap-around: shifts > N/2 correspond to negative rotation
+        # Step 10: Validate correlation quality
+        # If correlation peak is too low, the patterns don't match well
+        # This could indicate occlusion or non-rotational motion
+        MIN_CORRELATION = 0.3  # Peak should be at least 0.3 for valid rotation
+        if peak < MIN_CORRELATION:
+            logger.debug(f"Low correlation peak: {peak:.3f} < {MIN_CORRELATION}")
+            return 0.0
+
+        # Convert shift to degrees
         N = len(a)
         if k_max > N // 2:
             k_shift = k_max - N
@@ -370,10 +320,31 @@ class WashingMachineDetector:
         deg_per_bin = 360.0 / float(N)
         delta_deg = k_shift * deg_per_bin
 
-        # Motion score: absolute angular change normalized by 180°
-        # Modulate by correlation confidence
-        confidence = max(0.0, min(1.0, (peak + 1.0) / 2.0))  # map [-1,1] -> [0,1]
-        score = min(1.0, abs(delta_deg) / 180.0) * confidence
+        # Step 11: Filter out unrealistic rotations
+        # Washing machines typically rotate at 50-1500 RPM
+        # At 30fps: 50 RPM = 0.83 rev/sec = 0.028 rev/frame = 10°/frame
+        #          1500 RPM = 25 rev/sec = 0.83 rev/frame = 300°/frame
+        # So reasonable range is ~5°-360° per frame
+        MIN_ROTATION_DEG = 3.0  # Minimum rotation to consider as motion
+        MAX_ROTATION_DEG = 360.0  # Maximum (one full rotation per frame)
+
+        abs_delta = abs(delta_deg)
+        if abs_delta < MIN_ROTATION_DEG:
+            logger.debug(f"Rotation too small: {abs_delta:.1f}° < {MIN_ROTATION_DEG}°")
+            return 0.0
+
+        if abs_delta > MAX_ROTATION_DEG:
+            logger.debug(f"Rotation too large (likely noise): {abs_delta:.1f}° > {MAX_ROTATION_DEG}°")
+            return 0.0
+
+        # Step 12: Calculate final motion score
+        # Normalize by 180° and weight by correlation confidence
+        confidence = max(0.0, min(1.0, (peak + 1.0) / 2.0))
+        score = min(1.0, abs_delta / 180.0) * confidence
+
+        logger.debug(
+            f"Rotation detected: {abs_delta:.1f}°, peak={peak:.3f}, score={score:.3f}"
+        )
 
         return float(score)
 
@@ -388,7 +359,6 @@ class WashingMachineDetector:
         Returns:
             True if successful, False otherwise
         """
-        # If backend updates are disabled, do nothing and report success
         if getattr(self, "disable_backend", False):
             logger.debug(
                 "Backend disabled; skipping state update for machine %s -> %s",
@@ -569,14 +539,14 @@ class WashingMachineDetector:
 def main():
     """Main entry point"""
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.INFO,  # Change to DEBUG to see detailed detection info
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
     # Configuration
     CAMERA_SOURCE = 0  # Use 0 for webcam, or provide video file path
-    BACKEND_URL = "http://localhost:8000/api/machine-state"  # Update with your backend URL
-    MOTION_THRESHOLD = 0.02  # Rotational detector outputs smaller per-frame scores; tune 0.005–0.02
+    BACKEND_URL = "http://localhost:8000/api/machine-state"
+    MOTION_THRESHOLD = 0.004  # Tune based on your setup: 0.01-0.05
     STATE_CHANGE_DELAY = 10.0  # Seconds to wait before confirming state change
     USE_DRY_RUN = True
 
