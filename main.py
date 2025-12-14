@@ -2,7 +2,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -19,7 +19,7 @@ class MachineState:
     is_running: bool
     last_state_change: float
     motion_history: deque
-    circle_roi: Tuple[int, int, int, int]  # x, y, width, height
+    circle_roi: tuple[int, int, int, int]  # x, y, width, height
 
 
 class WashingMachineDetector:
@@ -35,7 +35,7 @@ class WashingMachineDetector:
         motion_threshold: float = 0.02,
         state_change_delay: float = 3.0,
         motion_history_size: int = 30,
-        http_put: Optional[Callable[..., Any]] = None,
+        http_put: Callable[..., Any] | None = None,
         request_timeout_s: float = 5.0,
         disable_backend: bool = True,
     ):
@@ -62,10 +62,10 @@ class WashingMachineDetector:
         self.request_timeout_s = request_timeout_s
         self.disable_backend = disable_backend
 
-        self.cap = None
-        self.machines: List[MachineState] = []
+        self.cap: cv2.VideoCapture | None = None
+        self.machines: list[MachineState] = []
         self.setup_complete = False
-        self.prev_frame = None
+        self.prev_frame: np.ndarray | None = None
 
     def initialize_camera(self) -> bool:
         """Initialize camera capture"""
@@ -83,7 +83,7 @@ class WashingMachineDetector:
 
     def setup_machine_circles(
         self, frame: np.ndarray
-    ) -> List[Tuple[int, int, int, int]]:
+    ) -> list[tuple[int, int, int, int]]:
         """
         Interactive setup to define circular ROIs for each machine
 
@@ -101,7 +101,7 @@ class WashingMachineDetector:
         logger.info("4. Press 'f' to finish setup")
         logger.info("5. Press 'q' to quit")
 
-        circles = []
+        circles: list = []
         drawing = False
         start_point = None
         current_rect = None
@@ -200,7 +200,7 @@ class WashingMachineDetector:
         return circles
 
     def detect_rotation_in_circle(
-        self, frame: np.ndarray, prev_frame: np.ndarray, roi: Tuple[int, int, int, int]
+        self, frame: np.ndarray, prev_frame: np.ndarray, roi: tuple[int, int, int, int]
     ) -> float:
         """
         Rotation-aware motion detection inside the circular ROI.
