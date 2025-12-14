@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MachineState:
     """Represents the state of a washing machine"""
+
     machine_id: int
     is_running: bool
     last_state_change: float
@@ -25,15 +26,15 @@ class WashingMachineDetector:
     """Detects washing machine state using motion detection on circular indicators"""
 
     def __init__(
-            self,
-            camera_source: int = 0,
-            backend_url: str = "http://localhost:8000/api/machine-state",
-            motion_threshold: float = 0.02,
-            state_change_delay: float = 3.0,
-            motion_history_size: int = 30,
-            http_post: Optional[Callable[..., Any]] = None,
-            request_timeout_s: float = 5.0,
-            disable_backend: bool = True,
+        self,
+        camera_source: int = 0,
+        backend_url: str = "http://localhost:8000/api/machine-state",
+        motion_threshold: float = 0.02,
+        state_change_delay: float = 3.0,
+        motion_history_size: int = 30,
+        http_post: Optional[Callable[..., Any]] = None,
+        request_timeout_s: float = 5.0,
+        disable_backend: bool = True,
     ):
         """
         Initialize the washing machine detector
@@ -77,7 +78,9 @@ class WashingMachineDetector:
         logger.info("Camera initialized successfully")
         return True
 
-    def setup_machine_circles(self, frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
+    def setup_machine_circles(
+        self, frame: np.ndarray
+    ) -> List[Tuple[int, int, int, int]]:
         """
         Interactive setup to define circular ROIs for each machine
 
@@ -109,17 +112,25 @@ class WashingMachineDetector:
 
             elif event == cv2.EVENT_MOUSEMOVE:
                 if drawing:
-                    current_rect = (start_point[0], start_point[1],
-                                    x - start_point[0], y - start_point[1])
+                    current_rect = (
+                        start_point[0],
+                        start_point[1],
+                        x - start_point[0],
+                        y - start_point[1],
+                    )
 
             elif event == cv2.EVENT_LBUTTONUP:
                 drawing = False
                 if start_point:
-                    current_rect = (start_point[0], start_point[1],
-                                    x - start_point[0], y - start_point[1])
+                    current_rect = (
+                        start_point[0],
+                        start_point[1],
+                        x - start_point[0],
+                        y - start_point[1],
+                    )
 
-        cv2.namedWindow('Setup Machine Circles')
-        cv2.setMouseCallback('Setup Machine Circles', mouse_callback)
+        cv2.namedWindow("Setup Machine Circles")
+        cv2.setMouseCallback("Setup Machine Circles", mouse_callback)
 
         while True:
             display_frame = frame.copy()
@@ -127,45 +138,67 @@ class WashingMachineDetector:
             # Draw confirmed circles
             for idx, (cx, cy, w, h) in enumerate(circles):
                 cv2.rectangle(display_frame, (cx, cy), (cx + w, cy + h), (0, 255, 0), 2)
-                cv2.putText(display_frame, f"Machine {idx + 1}", (cx, cy - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(
+                    display_frame,
+                    f"Machine {idx + 1}",
+                    (cx, cy - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2,
+                )
 
             # Draw current rectangle being drawn
             if current_rect:
                 x, y, w, h = current_rect
                 cv2.rectangle(display_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
 
-            cv2.putText(display_frame, f"Machines defined: {len(circles)}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.imshow('Setup Machine Circles', display_frame)
+            cv2.putText(
+                display_frame,
+                f"Machines defined: {len(circles)}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+            )
+            cv2.imshow("Setup Machine Circles", display_frame)
 
             key = cv2.waitKey(1) & 0xFF
 
-            if key == ord('c') and current_rect:
+            if key == ord("c") and current_rect:
                 x, y, w, h = current_rect
                 if w > 0 and h > 0:
                     circles.append((x, y, w, h))
-                    logger.info("Machine %s circle defined at (%s, %s, %s, %s)", len(circles), x, y, w, h)
+                    logger.info(
+                        "Machine %s circle defined at (%s, %s, %s, %s)",
+                        len(circles),
+                        x,
+                        y,
+                        w,
+                        h,
+                    )
                     current_rect = None
 
-            elif key == ord('d') and circles:
+            elif key == ord("d") and circles:
                 removed = circles.pop()
                 logger.info("Removed last circle: %s", removed)
 
-            elif key == ord('f') and circles:
+            elif key == ord("f") and circles:
                 logger.info("Setup complete! %s machines defined.", len(circles))
                 break
 
-            elif key == ord('q'):
+            elif key == ord("q"):
                 logger.warning("Setup cancelled")
                 circles = []
                 break
 
-        cv2.destroyWindow('Setup Machine Circles')
+        cv2.destroyWindow("Setup Machine Circles")
         return circles
 
-    def detect_rotation_in_circle(self, frame: np.ndarray, prev_frame: np.ndarray,
-                                  roi: Tuple[int, int, int, int]) -> float:
+    def detect_rotation_in_circle(
+        self, frame: np.ndarray, prev_frame: np.ndarray, roi: Tuple[int, int, int, int]
+    ) -> float:
         """
         Rotation-aware motion detection inside the circular ROI.
 
@@ -187,8 +220,8 @@ class WashingMachineDetector:
             return 0.0
 
         # Extract grayscale ROIs
-        cur = cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
-        prev = cv2.cvtColor(prev_frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
+        cur = cv2.cvtColor(frame[y : y + h, x : x + w], cv2.COLOR_BGR2GRAY)
+        prev = cv2.cvtColor(prev_frame[y : y + h, x : x + w], cv2.COLOR_BGR2GRAY)
 
         # Determine circle center and radius within ROI
         cx, cy = w // 2, h // 2
@@ -245,7 +278,9 @@ class WashingMachineDetector:
 
         # Verify dimensions
         if cur_polar.shape != (N_theta, N_r):
-            logger.debug(f"Unexpected polar shape: {cur_polar.shape}, expected ({N_theta}, {N_r})")
+            logger.debug(
+                f"Unexpected polar shape: {cur_polar.shape}, expected ({N_theta}, {N_r})"
+            )
             return 0.0
 
         # Step 6: Extract angular signature from middle radial band only
@@ -271,7 +306,9 @@ class WashingMachineDetector:
         # Minimum texture threshold - if both frames are too uniform, likely occluded or no features
         MIN_TEXTURE_STD = 2.0  # Tune this based on your camera/lighting
         if cur_std < MIN_TEXTURE_STD or prev_std < MIN_TEXTURE_STD:
-            logger.debug(f"Insufficient texture: cur_std={cur_std:.2f}, prev_std={prev_std:.2f}")
+            logger.debug(
+                f"Insufficient texture: cur_std={cur_std:.2f}, prev_std={prev_std:.2f}"
+            )
             return 0.0
 
         # Step 8: Normalize signatures
@@ -334,7 +371,9 @@ class WashingMachineDetector:
             return 0.0
 
         if abs_delta > MAX_ROTATION_DEG:
-            logger.debug(f"Rotation too large (likely noise): {abs_delta:.1f}° > {MAX_ROTATION_DEG}°")
+            logger.debug(
+                f"Rotation too large (likely noise): {abs_delta:.1f}° > {MAX_ROTATION_DEG}°"
+            )
             return 0.0
 
         # Step 12: Calculate final motion score
@@ -383,7 +422,9 @@ class WashingMachineDetector:
             )
 
             if getattr(response, "status_code", None) == 200:
-                logger.info("Machine %s state updated: %s", machine_id, payload["state"].upper())
+                logger.info(
+                    "Machine %s state updated: %s", machine_id, payload["state"].upper()
+                )
                 return True
 
             logger.warning(
@@ -397,7 +438,9 @@ class WashingMachineDetector:
             logger.exception("Network error sending update for machine %s", machine_id)
             return False
         except Exception:
-            logger.exception("Unexpected error sending update for machine %s", machine_id)
+            logger.exception(
+                "Unexpected error sending update for machine %s", machine_id
+            )
             return False
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -420,13 +463,19 @@ class WashingMachineDetector:
         # Process each machine
         for machine in self.machines:
             # Detect rotation-aware motion in this machine's circle
-            motion_score = self.detect_rotation_in_circle(frame, self.prev_frame, machine.circle_roi)
+            motion_score = self.detect_rotation_in_circle(
+                frame, self.prev_frame, machine.circle_roi
+            )
 
             # Add to motion history
             machine.motion_history.append(motion_score)
 
             # Calculate average motion over history
-            avg_motion = float(np.mean(machine.motion_history)) if machine.motion_history else 0.0
+            avg_motion = (
+                float(np.mean(machine.motion_history))
+                if machine.motion_history
+                else 0.0
+            )
 
             # Determine if machine should be running based on motion
             motion_detected = avg_motion > self.motion_threshold
@@ -459,15 +508,34 @@ class WashingMachineDetector:
 
             # Draw machine info
             status = "RUNNING" if machine.is_running else "STOPPED"
-            cv2.putText(display_frame, f"M{machine.machine_id}: {status}",
-                        (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            cv2.putText(
+                display_frame,
+                f"M{machine.machine_id}: {status}",
+                (x, y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                2,
+            )
 
             # Draw motion indicator
             motion_bar_length = int(avg_motion * 100)
-            cv2.rectangle(display_frame, (x, y + h + 5),
-                          (x + motion_bar_length, y + h + 15), color, -1)
-            cv2.putText(display_frame, f"{avg_motion:.3f}",
-                        (x + 105, y + h + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            cv2.rectangle(
+                display_frame,
+                (x, y + h + 5),
+                (x + motion_bar_length, y + h + 15),
+                color,
+                -1,
+            )
+            cv2.putText(
+                display_frame,
+                f"{avg_motion:.3f}",
+                (x + 105, y + h + 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                color,
+                1,
+            )
 
         self.prev_frame = frame.copy()
         return display_frame
@@ -496,7 +564,7 @@ class WashingMachineDetector:
                 is_running=False,
                 last_state_change=time.time(),
                 motion_history=deque(maxlen=self.motion_history_size),
-                circle_roi=circle_roi
+                circle_roi=circle_roi,
             )
             self.machines.append(machine)
 
@@ -516,10 +584,10 @@ class WashingMachineDetector:
                 display_frame = self.process_frame(frame)
 
                 # Show the frame
-                cv2.imshow('Washing Machine Monitor', display_frame)
+                cv2.imshow("Washing Machine Monitor", display_frame)
 
                 # Check for quit
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if cv2.waitKey(1) & 0xFF == ord("q"):
                     logger.info("Shutting down...")
                     break
 
