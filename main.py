@@ -1,12 +1,12 @@
+import logging
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Callable, List, Optional, Tuple
+
 import cv2
 import numpy as np
-import time
 import requests
-import os
-from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional, Callable, Any
-from collections import deque
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +28,14 @@ class WashingMachineDetector:
     def __init__(
         self,
         camera_source: int = 0,
-        backend_url: str = "http://localhost:8000/api/machine-state",
+        backend_url: str = (
+            "https://smartlaundry-production.up.railway.app"
+            "/api/Machine/update-machine-state"
+        ),
         motion_threshold: float = 0.02,
         state_change_delay: float = 3.0,
         motion_history_size: int = 30,
-        http_post: Optional[Callable[..., Any]] = None,
+        http_put: Optional[Callable[..., Any]] = None,
         request_timeout_s: float = 5.0,
         disable_backend: bool = True,
     ):
@@ -45,7 +48,7 @@ class WashingMachineDetector:
             motion_threshold: Threshold for detecting motion (0-1)
             state_change_delay: Seconds to wait before confirming state change
             motion_history_size: Number of frames to keep in motion history
-            http_post: Injectable POST function for mocking (defaults to requests.post)
+            http_put: Injectable PUT function for mocking (defaults to requests.put)
             request_timeout_s: Timeout for backend calls
             disable_backend: If True, skip any HTTP calls (dry-run mode)
         """
@@ -55,7 +58,7 @@ class WashingMachineDetector:
         self.state_change_delay = state_change_delay
         self.motion_history_size = motion_history_size
 
-        self.http_post = http_post or requests.post
+        self.http_put = http_put or requests.put
         self.request_timeout_s = request_timeout_s
         self.disable_backend = disable_backend
 
@@ -407,15 +410,14 @@ class WashingMachineDetector:
             return True
 
         payload = {
-            "machine_id": machine_id,
-            "state": "running" if is_running else "stopped",
-            "timestamp": time.time(),
+            "machineId": machine_id,
+            "isRunning": is_running,
         }
 
         try:
-            logger.debug("POST %s payload=%s", self.backend_url, payload)
+            logger.debug("PUT %s payload=%s", self.backend_url, payload)
 
-            response = self.http_post(
+            response = self.http_put(
                 self.backend_url,
                 json=payload,
                 timeout=self.request_timeout_s,
@@ -423,7 +425,9 @@ class WashingMachineDetector:
 
             if getattr(response, "status_code", None) == 200:
                 logger.info(
-                    "Machine %s state updated: %s", machine_id, payload["state"].upper()
+                    "Machine %s state updated: %s",
+                    machine_id,
+                    "RUNNING" if is_running else "STOPPED",
                 )
                 return True
 
@@ -613,7 +617,10 @@ def main():
 
     # Configuration
     CAMERA_SOURCE = 0  # Use 0 for webcam, or provide video file path
-    BACKEND_URL = "http://localhost:8000/api/machine-state"
+    BACKEND_URL = (
+        "https://smartlaundry-production.up.railway.app"
+        "/api/Machine/update-machine-state"
+    )
     MOTION_THRESHOLD = 0.004  # Tune based on your setup: 0.01-0.05
     STATE_CHANGE_DELAY = 10.0  # Seconds to wait before confirming state change
     USE_DRY_RUN = True
